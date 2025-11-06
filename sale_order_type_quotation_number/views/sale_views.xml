@@ -13,7 +13,6 @@
                     name="action_recompute_quotation_seq"
                     type="object"
                     string="Recompute Quotation Seq."
-                    attrs="{'invisible': [('recompute_quotation_seq', '=', False)]}"
                     confirm="Recomputing the quotation sequence will generate a gap in the previous sequence. Would you like to proceed?"
                 />
             </button>
