@@ -6,11 +6,24 @@ from odoo.tests.common import TransactionCase
 
 
 class TestSaleOrder(TransactionCase):
-    def setUp(self, *args, **kwargs):
-        super(TestSaleOrder, self).setUp()
-        self.sale_order_model = self.env["sale.order"]
-        company = self.env.company
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.env = cls.env(context=dict(cls.env.context, tracking_disable=True))
+        cls.sale_order_model = cls.env["sale.order"]
+        company = cls.env.company
         company.keep_name_so = False
+        cls.company1 = cls.env["res.company"].create(
+            {"name": "Test Company 1", "keep_name_so": False}
+        )
+        cls.partner = cls.env["res.partner"].create({"name": "Test Partner"})
+        cls.order_company1 = cls.env["sale.order"].create(
+            {
+                "name": "SQ/2023/001",
+                "partner_id": cls.partner.id,
+                "company_id": cls.company1.id,
+            }
+        )
 
     def test_enumeration(self):
         order1 = self.sale_order_model.create(
@@ -66,7 +79,7 @@ class TestSaleOrder(TransactionCase):
 
     def test_error_confirmation_sequence(self):
         order = self.sale_order_model.create(
-            {"partner_id": self.env.ref("base.res_partner_1").id, "state": "done"}
+            {"partner_id": self.env.ref("base.res_partner_1").id, "state": "sale"}
         )
         # An exception is forced
         sequence_id = self.env["ir.sequence"].search(
@@ -82,3 +95,20 @@ class TestSaleOrder(TransactionCase):
         # Now the SQ can be confirmed
         order.action_confirm()
         self.assertEqual(next_name, order.name)
+
+    def test_sequence_assignment(self):
+        sequence_id = self.env["ir.sequence"].search(
+            [
+                ("code", "=", "sale.order"),
+                ("company_id", "in", [self.order_company1.company_id.id, False]),
+            ]
+        )
+        next_name = sequence_id.get_next_char(sequence_id.number_next_actual)
+        self.order_company1.action_confirm()
+        self.assertEqual(next_name, self.order_company1.name)
+
+    def test_create_with_specific_name(self):
+        order = self.sale_order_model.create(
+            {"name": "CustomName", "partner_id": self.env.ref("base.res_partner_1").id}
+        )
+        self.assertEqual(order.name, "CustomName")

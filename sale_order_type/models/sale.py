@@ -14,16 +14,20 @@ class SaleOrder(models.Model):
         comodel_name="sale.order.type",
         string="Type",
         compute="_compute_sale_type_id",
+        precompute=True,
         store=True,
         readonly=False,
-        states={
-            "sale": [("readonly", True)],
-            "done": [("readonly", True)],
-            "cancel": [("readonly", True)],
-        },
         ondelete="restrict",
         copy=True,
         check_company=True,
+    )
+    # Fields converted to computed writable
+    picking_policy = fields.Selection(
+        compute="_compute_picking_policy", store=True, readonly=False
+    )
+    incoterm = fields.Many2one(compute="_compute_incoterm", store=True, readonly=False)
+    analytic_account_id = fields.Many2one(
+        compute="_compute_analytic_account_id", store=True, readonly=False
     )
 
     @api.model
@@ -36,14 +40,20 @@ class SaleOrder(models.Model):
     def _default_sequence_id(self):
         """We get the sequence in same way the core next_by_code method does so we can
         get the proper default sequence"""
-        force_company = self.company_id.id or self.env.company.id
+        force_company = self.env.company.id
         return self.env["ir.sequence"].search(
-            [("code", "=", "sale.order"), ("company_id", "in", [force_company, False])],
+            [
+                ("code", "=", "sale.order"),
+                "|",
+                ("company_id", "=", force_company),
+                ("company_id", "=", False),
+            ],
             order="company_id",
             limit=1,
         )
 
     @api.depends("partner_id", "company_id")
+    @api.depends_context("partner_id", "company_id", "company")
     def _compute_sale_type_id(self):
         for record in self:
             # Specific partner sale type value
@@ -61,58 +71,98 @@ class SaleOrder(models.Model):
                 sale_type = record._default_type_id()
             record.type_id = sale_type
 
-    @api.onchange("type_id")
-    def onchange_type_id(self):
-        # TODO: To be changed to computed stored readonly=False if possible in v14?
-        vals = {}
-        for order in self:
+    @api.depends("type_id")
+    def _compute_warehouse_id(self):
+        res = super()._compute_warehouse_id()
+        for order in self.filtered("type_id"):
             order_type = order.type_id
-            # Order values
-            vals = {}
             if order_type.warehouse_id:
-                vals.update({"warehouse_id": order_type.warehouse_id})
-            if order_type.picking_policy:
-                vals.update({"picking_policy": order_type.picking_policy})
-            if order_type.payment_term_id:
-                vals.update({"payment_term_id": order_type.payment_term_id})
-            if order_type.pricelist_id:
-                vals.update({"pricelist_id": order_type.pricelist_id})
-            if order_type.incoterm_id:
-                vals.update({"incoterm": order_type.incoterm_id})
-            if order_type.analytic_account_id:
-                vals.update({"analytic_account_id": order_type.analytic_account_id})
-            if order_type.quotation_validity_days:
-                vals.update(
-                    {
-                        "validity_date": fields.Date.to_string(
-                            datetime.now()
-                            + timedelta(order_type.quotation_validity_days)
-                        )
-                    }
-                )
-            if vals:
-                order.update(vals)
-            # Order line values
-            line_vals = {}
-            if order_type.route_id:
-                line_vals.update({"route_id": order_type.route_id.id})
-            if line_vals:
-                order.order_line.update(line_vals)
+                order.warehouse_id = order_type.warehouse_id
+        return res
 
-    @api.model
-    def create(self, vals):
-        if vals.get("name", _("New")) == _("New") and vals.get("type_id"):
-            sale_type = self.env["sale.order.type"].browse(vals["type_id"])
-            if sale_type.sequence_id:
-                vals["name"] = sale_type.sequence_id.next_by_id(
-                    sequence_date=vals.get("date_order")
+    def _depends_picking_policy(self):
+        depends = []
+        if hasattr(super(), "_depends_picking_policy"):
+            depends = super()._depends_picking_policy()
+        depends.append("type_id")
+        return depends
+
+    @api.depends(lambda self: self._depends_picking_policy())
+    def _compute_picking_policy(self):
+        res = None
+        if hasattr(super(), "_compute_picking_policy"):
+            res = super()._compute_picking_policy()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.picking_policy:
+                order.picking_policy = order_type.picking_policy
+        return res
+
+    @api.depends("type_id")
+    def _compute_payment_term_id(self):
+        res = super()._compute_payment_term_id()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.payment_term_id:
+                order.payment_term_id = order_type.payment_term_id
+        return res
+
+    @api.depends("type_id")
+    def _compute_pricelist_id(self):
+        res = super()._compute_pricelist_id()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.pricelist_id:
+                order.pricelist_id = order_type.pricelist_id
+        return res
+
+    @api.depends("type_id")
+    def _compute_incoterm(self):
+        res = None
+        if hasattr(super(), "_compute_incoterm"):
+            res = super()._compute_incoterm()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.incoterm_id:
+                order.incoterm = order_type.incoterm_id
+        return res
+
+    @api.depends("type_id")
+    def _compute_analytic_account_id(self):
+        res = None
+        if hasattr(super(), "_compute_analytic_account_id"):
+            res = super()._compute_analytic_account_id()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.analytic_account_id:
+                order.analytic_account_id = order_type.analytic_account_id
+        return res
+
+    @api.depends("type_id")
+    def _compute_validity_date(self):
+        res = super()._compute_validity_date()
+        for order in self.filtered("type_id"):
+            order_type = order.type_id
+            if order_type.quotation_validity_days:
+                order.validity_date = fields.Date.to_string(
+                    datetime.now() + timedelta(order_type.quotation_validity_days)
                 )
-        return super(SaleOrder, self).create(vals)
+        return res
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            if vals.get("name", _("New")) == _("New") and vals.get("type_id"):
+                sale_type = self.env["sale.order.type"].browse(vals["type_id"])
+                if sale_type.sequence_id:
+                    vals["name"] = sale_type.sequence_id.next_by_id(
+                        sequence_date=vals.get("date_order")
+                    )
+        return super().create(vals_list)
 
     def write(self, vals):
         """A sale type could have a different order sequence, so we could
         need to change it accordingly"""
-        default_sequence = self._default_sequence_id()
         if vals.get("type_id"):
             sale_type = self.env["sale.order.type"].browse(vals["type_id"])
             if sale_type.sequence_id:
@@ -122,7 +172,8 @@ class SaleOrder(models.Model):
                     # sequence has the same default sequence.
                     ignore_default_sequence = (
                         not record.type_id.sequence_id
-                        and sale_type.sequence_id == default_sequence
+                        and sale_type.sequence_id
+                        == record.with_company(record.company_id)._default_sequence_id()
                     )
                     if (
                         record.state in {"draft", "sent"}
@@ -133,34 +184,33 @@ class SaleOrder(models.Model):
                         new_vals["name"] = sale_type.sequence_id.next_by_id(
                             sequence_date=vals.get("date_order")
                         )
-                        super(SaleOrder, record).write(new_vals)
+                        super().write(new_vals)
                     else:
-                        super(SaleOrder, record).write(vals)
+                        super().write(vals)
                 return True
         return super().write(vals)
 
     def _prepare_invoice(self):
-        res = super(SaleOrder, self)._prepare_invoice()
+        res = super()._prepare_invoice()
         if self.type_id.journal_id:
             res["journal_id"] = self.type_id.journal_id.id
         if self.type_id:
             res["sale_type_id"] = self.type_id.id
         return res
 
-    def copy_data(self, default=None):
-        vals_list = super().copy_data(default)
-        if self.type_id.analytic_account_id:
-            for vals in vals_list:
-                vals["analytic_account_id"] = self.type_id.analytic_account_id.id
-        return vals_list
-
 
 class SaleOrderLine(models.Model):
     _inherit = "sale.order.line"
 
-    @api.onchange("product_id")
-    def product_id_change(self):
-        res = super(SaleOrderLine, self).product_id_change()
-        if self.order_id.type_id.route_id:
-            self.update({"route_id": self.order_id.type_id.route_id})
+    route_id = fields.Many2one(compute="_compute_route_id", store=True, readonly=False)
+
+    @api.depends("order_id.type_id")
+    def _compute_route_id(self):
+        res = None
+        if hasattr(super(), "_compute_route_id"):
+            res = super()._compute_route_id()
+        for line in self.filtered("order_id.type_id"):
+            order_type = line.order_id.type_id
+            if order_type.route_id:
+                line.route_id = order_type.route_id
         return res

@@ -14,17 +14,21 @@ class SaleOrder(models.Model):
         string="Quotation Sequence Used", default=False, copy=False, readonly=True
     )
 
-    @api.model
-    def create(self, vals):
-        if self.is_using_quotation_number(vals):
-            sequence = self.get_quotation_seq()
-            vals.update({"name": sequence or "/", "quotation_seq_used": True})
-        return super(SaleOrder, self).create(vals)
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            if self.is_using_quotation_number(vals):
+                if not vals.get("name"):
+                    company_id = vals.get("company_id", self.env.company.id)
+                    sequence = self.with_company(company_id).get_quotation_seq()
+                    vals["name"] = sequence or "/"
+                vals["quotation_seq_used"] = True
+        return super().create(vals_list)
 
     @api.model
     def is_using_quotation_number(self, vals):
         company = False
-        if "company_id" in vals:
+        if vals.get("company_id"):
             company = self.env["res.company"].browse(vals.get("company_id"))
         else:
             company = self.env.company
@@ -38,7 +42,7 @@ class SaleOrder(models.Model):
             default["origin"] = self.origin + ", " + self.name
         else:
             default["origin"] = self.name
-        return super(SaleOrder, self).copy(default)
+        return super().copy(default)
 
     @api.model
     def get_quotation_seq(self):
@@ -48,19 +52,19 @@ class SaleOrder(models.Model):
         self.ensure_one()
         return self.env["ir.sequence"].next_by_code("sale.order")
 
-    def _action_confirm(self):
+    def action_confirm(self):
+        sequence = self.env["ir.sequence"].search(
+            [("code", "=", "sale.quotation")], limit=1
+        )
         for order in self:
-            if not (
-                order.state == "sale"
-                and order.quotation_seq_used
-                and not order.company_id.keep_name_so
-            ):
+            if not self.quotation_seq_used:
                 continue
-            quo = ""
+            if order.state not in ("draft", "sent") or order.company_id.keep_name_so:
+                continue
             if order.origin and order.origin != "":
                 quo = order.origin + ", " + order.name
             else:
                 quo = order.name
-            sequence = order.get_sale_order_seq()
+            sequence = order.with_company(order.company_id.id).get_sale_order_seq()
             order.write({"origin": quo, "name": sequence, "quotation_seq_used": False})
-        return super()._action_confirm()
+        return super().action_confirm()
